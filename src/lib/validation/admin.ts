@@ -178,6 +178,33 @@ export const subscriptionListQuerySchema = pageQuerySchema.extend({
   planId: idSchema.optional(),
 });
 
+const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}, "Enter a valid date.");
+
+export const billingRunInputSchema = z.object({
+  asOfDate: dateOnly,
+});
+
+export const invoiceStatuses = ["DRAFT", "CONFIRMED", "PAID", "CANCELLED"] as const;
+
+export const invoiceListQuerySchema = pageQuerySchema.extend({
+  status: z.enum(invoiceStatuses).optional(),
+  customerId: idSchema.optional(),
+  overdue: z.enum(["true", "false"]).optional(),
+  startDate: dateOnly.optional(),
+  endDate: dateOnly.optional(),
+}).superRefine((value, context) => {
+  if (value.startDate && value.endDate && value.startDate > value.endDate) {
+    context.addIssue({ code: "custom", path: ["endDate"], message: "End date must be on or after start date." });
+  }
+});
+
+export const invoiceActionSchema = z.object({
+  action: z.enum(["confirm", "cancel", "send"]),
+});
+
 export const subscriptionActionSchema = z.object({
   action: z.enum([
     "send_quotation",
