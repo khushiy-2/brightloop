@@ -17,6 +17,10 @@ export default async function PortalLayout({ children }: { children: React.React
           <span className="brand-mark" aria-hidden="true">B</span>
           <span>brightloop</span>
         </Link>
+        <nav className="portal-nav" aria-label="Customer navigation">
+          <Link href="/portal/subscriptions">My subscriptions</Link>
+          <Link href="/portal/invoices">My invoices</Link>
+        </nav>
         <div className="portal-user">
           <span className="topbar-name">{user.name}</span>
           <LogoutButton />
