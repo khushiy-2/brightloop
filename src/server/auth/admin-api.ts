@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { AuthorizationError } from "@/server/auth/guards";
 import { AdminResourceNotFoundError } from "@/server/services/errors";
+import { ServiceValidationError, SubscriptionTransitionError } from "@/server/services/service-errors";
 
 export function adminApiErrorResponse(error: unknown) {
   if (error instanceof AuthorizationError) {
@@ -9,6 +10,12 @@ export function adminApiErrorResponse(error: unknown) {
   }
   if (error instanceof AdminResourceNotFoundError) {
     return NextResponse.json({ error: error.message }, { status: 404 });
+  }
+  if (error instanceof ServiceValidationError) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+  if (error instanceof SubscriptionTransitionError) {
+    return NextResponse.json({ error: error.message }, { status: 409 });
   }
 
   if (error instanceof Prisma.PrismaClientKnownRequestError) {

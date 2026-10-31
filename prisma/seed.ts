@@ -1,4 +1,12 @@
-import { BillingPeriod, Prisma, ProductType, Role, TaxType } from "@prisma/client";
+import {
+  BillingPeriod,
+  DiscountScope,
+  DiscountType,
+  Prisma,
+  ProductType,
+  Role,
+  TaxType,
+} from "@prisma/client";
 import { hashPassword } from "../src/server/auth/password";
 import { prisma } from "../src/server/db";
 
@@ -95,6 +103,122 @@ async function seedPlan(input: {
   }
 }
 
+async function seedCustomer(input: {
+  name: string;
+  email: string;
+  phone: string;
+  company: string;
+  address: string;
+}) {
+  const existing = await prisma.customer.findFirst({ where: { email: input.email } });
+  if (existing) {
+    await prisma.customer.update({ where: { id: existing.id }, data: input });
+  } else {
+    await prisma.customer.create({ data: input });
+  }
+}
+
+async function seedQuotationTemplate(input: {
+  name: string;
+  planName: string;
+  validityDays: number;
+  lines: {
+    productName: string;
+    variant?: { attribute: string; value: string };
+    quantity: number;
+    taxName?: string;
+  }[];
+}) {
+  const plan = await prisma.plan.findFirst({ where: { name: input.planName }, select: { id: true } });
+  if (!plan) throw new Error(`Unable to seed template ${input.name}: plan ${input.planName} was not found.`);
+  const lines = await Promise.all(input.lines.map(async (line) => {
+    const product = await prisma.product.findFirst({
+      where: { name: line.productName },
+      select: {
+        id: true,
+        defaultTaxId: true,
+        variants: { select: { id: true, attribute: true, value: true } },
+      },
+    });
+    if (!product) throw new Error(`Unable to seed template ${input.name}: product ${line.productName} was not found.`);
+    const variant = line.variant
+      ? product.variants.find((candidate) => candidate.attribute === line.variant!.attribute && candidate.value === line.variant!.value)
+      : undefined;
+    if (line.variant && !variant) {
+      throw new Error(`Unable to seed template ${input.name}: variant ${line.variant.value} was not found.`);
+    }
+    const tax = line.taxName ? await prisma.tax.findFirst({ where: { name: line.taxName }, select: { id: true } }) : null;
+    if (line.taxName && !tax) throw new Error(`Unable to seed template ${input.name}: tax ${line.taxName} was not found.`);
+    return {
+      productId: product.id,
+      variantId: variant?.id ?? null,
+      quantity: line.quantity,
+      taxId: tax?.id ?? product.defaultTaxId,
+    };
+  }));
+  await prisma.$transaction(async (transaction) => {
+    const existing = await transaction.quotationTemplate.findFirst({ where: { name: input.name }, select: { id: true } });
+    const template = existing
+      ? await transaction.quotationTemplate.update({
+        where: { id: existing.id },
+        data: { planId: plan.id, validityDays: input.validityDays, isActive: true },
+      })
+      : await transaction.quotationTemplate.create({
+        data: { name: input.name, planId: plan.id, validityDays: input.validityDays, isActive: true },
+      });
+    await transaction.quotationTemplateLine.deleteMany({ where: { templateId: template.id } });
+    await transaction.quotationTemplateLine.createMany({
+      data: lines.map((line) => ({ templateId: template.id, ...line })),
+    });
+  });
+}
+
+async function seedDiscount(input: {
+  name: string;
+  code: string;
+  type: DiscountType;
+  value: string;
+  scope: DiscountScope;
+  productNames: string[];
+  minPurchase: string | null;
+  minQuantity: number | null;
+  usageLimit: number | null;
+}) {
+  const products = await prisma.product.findMany({
+    where: { name: { in: input.productNames } },
+    select: { id: true, name: true },
+  });
+  if (products.length !== input.productNames.length) {
+    throw new Error(`Unable to seed discount ${input.code}: a target product was not found.`);
+  }
+
+  const discountData = {
+    name: input.name,
+    type: input.type,
+    value: new Prisma.Decimal(input.value),
+    scope: input.scope,
+    minPurchase: input.minPurchase === null ? null : new Prisma.Decimal(input.minPurchase),
+    minQuantity: input.minQuantity,
+    startDate: new Date("2026-01-01T00:00:00.000Z"),
+    endDate: null,
+    usageLimit: input.usageLimit,
+    isActive: true,
+  };
+  await prisma.$transaction(async (transaction) => {
+    const discount = await transaction.discount.upsert({
+      where: { code: input.code },
+      create: { ...discountData, code: input.code },
+      update: discountData,
+    });
+    await transaction.discountProduct.deleteMany({ where: { discountId: discount.id } });
+    if (products.length > 0) {
+      await transaction.discountProduct.createMany({
+        data: products.map((product) => ({ discountId: discount.id, productId: product.id })),
+      });
+    }
+  });
+}
+
 async function main() {
   await seedUser({ name: "Brightloop Admin", email: "admin@brightloop.com", password: "Admin@12345!", role: Role.ADMIN });
   await seedUser({ name: "Brightloop Staff", email: "staff@brightloop.com", password: "Staff@12345!", role: Role.STAFF });
@@ -188,6 +312,107 @@ async function main() {
     closable: false,
     pausable: false,
     renewable: true,
+  });
+
+  await seedCustomer({
+    name: "Northstar Analytics",
+    email: "billing@northstar.example",
+    phone: "+1 555 010 2401",
+    company: "Northstar Analytics",
+    address: "120 Market Street, San Francisco, CA",
+  });
+  await seedCustomer({
+    name: "Cedar Grove Studio",
+    email: "accounts@cedargrove.example",
+    phone: "+1 555 010 2402",
+    company: "Cedar Grove Studio",
+    address: "45 King Street, Toronto, ON",
+  });
+  await seedCustomer({
+    name: "Meridian Health Group",
+    email: "finance@meridianhealth.example",
+    phone: "+1 555 010 2403",
+    company: "Meridian Health Group",
+    address: "800 Lake Avenue, Chicago, IL",
+  });
+
+  await seedQuotationTemplate({
+    name: "Starter Implementation",
+    planName: "Starter Daily",
+    validityDays: 14,
+    lines: [{
+      productName: "Odoo Implementation",
+      variant: { attribute: "Brand", value: "Odoo" },
+      quantity: 1,
+      taxName: "GST 18%",
+    }],
+  });
+  await seedQuotationTemplate({
+    name: "Growth Team Package",
+    planName: "Growth Monthly",
+    validityDays: 30,
+    lines: [
+      {
+        productName: "Brightloop Subscription",
+        variant: { attribute: "License", value: "Team" },
+        quantity: 3,
+        taxName: "GST 18%",
+      },
+      { productName: "Priority Support", quantity: 1, taxName: "GST 5%" },
+    ],
+  });
+  await seedQuotationTemplate({
+    name: "Enterprise Annual Rollout",
+    planName: "Annual Enterprise",
+    validityDays: 45,
+    lines: [
+      {
+        productName: "Brightloop Subscription",
+        variant: { attribute: "License", value: "Business" },
+        quantity: 10,
+        taxName: "GST 18%",
+      },
+      {
+        productName: "Data Migration",
+        variant: { attribute: "Volume", value: "Large" },
+        quantity: 1,
+        taxName: "GST 18%",
+      },
+    ],
+  });
+
+  await seedDiscount({
+    name: "Welcome 10%",
+    code: "WELCOME10",
+    type: DiscountType.PERCENT,
+    value: "10.00",
+    scope: DiscountScope.SUBSCRIPTION,
+    productNames: [],
+    minPurchase: "100.00",
+    minQuantity: 1,
+    usageLimit: 100,
+  });
+  await seedDiscount({
+    name: "Implementation $100 Off",
+    code: "IMPLEMENT100",
+    type: DiscountType.FIXED,
+    value: "100.00",
+    scope: DiscountScope.PRODUCT,
+    productNames: ["Odoo Implementation"],
+    minPurchase: "500.00",
+    minQuantity: 1,
+    usageLimit: null,
+  });
+  await seedDiscount({
+    name: "Add-on 5% Off",
+    code: "ADDON5",
+    type: DiscountType.PERCENT,
+    value: "5.00",
+    scope: DiscountScope.PRODUCT,
+    productNames: ["Data Migration", "Priority Support"],
+    minPurchase: null,
+    minQuantity: 2,
+    usageLimit: 250,
   });
 }
 

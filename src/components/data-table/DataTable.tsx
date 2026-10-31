@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Table,
   TableBody,
@@ -33,6 +33,7 @@ type DataTableProps<T extends { id: string }> = {
   refreshKey?: number;
   rowActions?: (row: T, refresh: () => void) => ReactNode;
   renderExpanded?: (row: T, refresh: () => void) => ReactNode;
+  filters?: Record<string, string>;
 };
 
 export function DataTable<T extends { id: string }>({
@@ -44,6 +45,7 @@ export function DataTable<T extends { id: string }>({
   refreshKey = 0,
   rowActions,
   renderExpanded,
+  filters = {},
 }: DataTableProps<T>) {
   const [page, setPage] = useState(initialPage);
   const [query, setQuery] = useState(initialQuery);
@@ -52,6 +54,8 @@ export function DataTable<T extends { id: string }>({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
+  const filtersKey = JSON.stringify(filters);
+  const previousFiltersKey = useRef(filtersKey);
 
   const refresh = useCallback(() => {
     setError("");
@@ -70,6 +74,12 @@ export function DataTable<T extends { id: string }>({
   }, []);
 
   useEffect(() => {
+    if (previousFiltersKey.current === filtersKey) return;
+    previousFiltersKey.current = filtersKey;
+    setLocation(1, query);
+  }, [filtersKey, query, setLocation]);
+
+  useEffect(() => {
     if (search === query) return;
     const timeout = window.setTimeout(() => {
       const nextQuery = search.trim();
@@ -83,6 +93,9 @@ export function DataTable<T extends { id: string }>({
     const controller = new AbortController();
     const params = new URLSearchParams({ page: String(page) });
     if (query) params.set("q", query);
+    for (const [key, value] of Object.entries(JSON.parse(filtersKey) as Record<string, string>)) {
+      if (value) params.set(key, value);
+    }
     void fetch(`${endpoint}?${params.toString()}`, { signal: controller.signal })
       .then(async (response) => {
         const result = await response.json() as DataTablePage<T> & { error?: string };
@@ -95,7 +108,7 @@ export function DataTable<T extends { id: string }>({
         setError(cause instanceof Error ? cause.message : "Unable to load records.");
       });
     return () => controller.abort();
-  }, [endpoint, page, query, refreshKey, reload]);
+  }, [endpoint, page, query, refreshKey, reload, filtersKey]);
 
   return (
     <section className="admin-table-panel">

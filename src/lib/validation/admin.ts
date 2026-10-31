@@ -3,9 +3,25 @@ import { z } from "zod";
 export const productTypes = ["SERVICE", "SOFTWARE", "ADDON", "PHYSICAL"] as const;
 export const taxTypes = ["PERCENT", "FIXED"] as const;
 export const billingPeriods = ["DAILY", "WEEKLY", "MONTHLY", "YEARLY"] as const;
+export const discountTypes = ["PERCENT", "FIXED"] as const;
+export const discountScopes = ["PRODUCT", "SUBSCRIPTION"] as const;
+export const subscriptionStatuses = ["DRAFT", "QUOTATION", "CONFIRMED", "ACTIVE", "PAUSED", "CLOSED"] as const;
 
 const moneyString = z.string().trim().regex(/^\d{1,10}(?:\.\d{1,2})?$/, "Enter an amount with up to 10 whole digits and 2 decimal places.");
 const rateString = z.string().trim().regex(/^\d{1,4}(?:\.\d{1,3})?$/, "Enter a rate with up to 4 whole digits and 3 decimal places.");
+
+function decimalIsPositive(value: string) {
+  if (!/^\d{1,10}(?:\.\d{1,2})?$/.test(value)) return false;
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(whole) > BigInt("0") || BigInt(fraction.padEnd(2, "0")) > BigInt("0");
+}
+
+function percentageIsAtMost100(value: string) {
+  if (!/^\d{1,10}(?:\.\d{1,2})?$/.test(value)) return false;
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(whole) < BigInt("100")
+    || (BigInt(whole) === BigInt("100") && BigInt(fraction.padEnd(2, "0")) === BigInt("0"));
+}
 
 export const pageQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(100_000).default(1),
@@ -75,6 +91,107 @@ export const planInputSchema = z.object({
     context.addIssue({ code: "custom", path: ["availableTo"], message: "End date must be after start date." });
   }
 });
+
+export const discountInputSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  code: z.string().trim().max(80).nullable().optional().default(null).transform((value) => value || null),
+  type: z.enum(discountTypes),
+  value: moneyString.refine(decimalIsPositive, "Value must be greater than zero."),
+  scope: z.enum(discountScopes),
+  productIds: z.array(idSchema).max(500).default([]),
+  minPurchase: moneyString.nullable().optional().default(null),
+  minQuantity: z.number().int().min(1).max(2_147_483_647).nullable().optional().default(null),
+  startDate: z.string().min(1).refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid start date."),
+  endDate: z.string().nullable().optional().default(null),
+  usageLimit: z.number().int().min(1).max(2_147_483_647).nullable().optional().default(null),
+  isActive: z.boolean(),
+}).superRefine((value, context) => {
+  if (value.type === "PERCENT" && !percentageIsAtMost100(value.value)) {
+    context.addIssue({ code: "custom", path: ["value"], message: "Percentage discounts cannot exceed 100." });
+  }
+  if (value.scope === "PRODUCT" && value.productIds.length === 0) {
+    context.addIssue({ code: "custom", path: ["productIds"], message: "Choose at least one product." });
+  }
+  if (value.scope === "SUBSCRIPTION" && value.productIds.length > 0) {
+    context.addIssue({ code: "custom", path: ["productIds"], message: "Subscription discounts cannot target individual products." });
+  }
+  if (value.endDate && Number.isNaN(Date.parse(value.endDate))) {
+    context.addIssue({ code: "custom", path: ["endDate"], message: "Enter a valid end date." });
+  } else if (value.endDate && new Date(value.endDate) < new Date(value.startDate)) {
+    context.addIssue({ code: "custom", path: ["endDate"], message: "End date cannot be before start date." });
+  }
+});
+
+const optionalText = (max: number) => z.string().trim().max(max).nullable().optional().default(null)
+  .transform((value) => value || null);
+const validDate = z.string().min(1).refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid date.");
+
+export const customerInputSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  email: z.email().max(254),
+  phone: optionalText(80),
+  company: optionalText(160),
+  address: optionalText(1000),
+});
+
+export const quotationTemplateLineSchema = z.object({
+  productId: idSchema,
+  variantId: idSchema.nullable().optional().default(null),
+  quantity: z.number().int().min(1).max(2_147_483_647),
+  taxId: idSchema.nullable().optional().default(null),
+});
+
+export const quotationTemplateInputSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  planId: idSchema,
+  validityDays: z.number().int().min(1).max(36_500),
+  isActive: z.boolean().default(true),
+  lines: z.array(quotationTemplateLineSchema).min(1).max(100),
+});
+
+export const subscriptionLineSchema = z.object({
+  productId: idSchema,
+  variantId: idSchema.nullable().optional().default(null),
+  quantity: z.number().int().min(1).max(2_147_483_647),
+  unitPrice: moneyString,
+  taxId: idSchema.nullable().optional().default(null),
+});
+
+export const subscriptionInputSchema = z.object({
+  customerId: idSchema,
+  planId: idSchema,
+  templateId: idSchema.nullable().optional().default(null),
+  paymentTermId: idSchema,
+  startDate: validDate,
+  expiryDate: validDate,
+  notes: optionalText(2000),
+  lines: z.array(subscriptionLineSchema).min(1).max(100),
+}).superRefine((value, context) => {
+  if (new Date(value.expiryDate) < new Date(value.startDate)) {
+    context.addIssue({ code: "custom", path: ["expiryDate"], message: "Expiry date must be on or after the start date." });
+  }
+});
+
+export const subscriptionListQuerySchema = pageQuerySchema.extend({
+  status: z.enum(subscriptionStatuses).optional(),
+  customerId: idSchema.optional(),
+  planId: idSchema.optional(),
+});
+
+export const subscriptionActionSchema = z.object({
+  action: z.enum([
+    "send_quotation",
+    "confirm",
+    "activate",
+    "pause",
+    "resume",
+    "close",
+    "renew",
+    "cancel",
+  ]),
+});
+
+export const subscriptionDiscountSchema = z.object({ discountId: idSchema });
 
 export const variantUpdateSchema = variantInputSchema.extend({
   isActive: z.boolean(),
