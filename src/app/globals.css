@@ -490,6 +490,21 @@ body {
   color: #68736c;
 }
 
+.status-paid {
+  background: #e8f4ec;
+  color: #28694f;
+}
+
+.status-outstanding {
+  background: #f1f2f1;
+  color: #68736c;
+}
+
+.status-overdue {
+  background: #fff0e8;
+  color: #a64b24;
+}
+
 .dialog-backdrop {
   position: fixed;
   z-index: 50;
@@ -852,6 +867,13 @@ body {
   gap: 0.8rem;
 }
 
+.payment-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 0.8rem;
+}
+
 .invoice-overdue-filter {
   min-height: 2.65rem;
 }
@@ -1142,7 +1164,8 @@ body {
   .subscription-filter-bar,
   .subscription-form-grid,
   .subscription-detail-grid,
-  .invoice-filter-bar {
+  .invoice-filter-bar,
+  .payment-filter-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1178,6 +1201,7 @@ body {
   .subscription-form-grid,
   .subscription-detail-grid,
   .invoice-filter-bar,
+  .payment-filter-bar,
   .billing-run-panel,
   .template-line-row {
     grid-template-columns: 1fr;

@@ -188,11 +188,32 @@ export const billingRunInputSchema = z.object({
 });
 
 export const invoiceStatuses = ["DRAFT", "CONFIRMED", "PAID", "CANCELLED"] as const;
+export const paymentMethods = ["CASH", "CARD", "UPI", "BANK_TRANSFER", "CHEQUE", "OTHER"] as const;
 
 export const invoiceListQuerySchema = pageQuerySchema.extend({
   status: z.enum(invoiceStatuses).optional(),
   customerId: idSchema.optional(),
   overdue: z.enum(["true", "false"]).optional(),
+  startDate: dateOnly.optional(),
+  endDate: dateOnly.optional(),
+}).superRefine((value, context) => {
+  if (value.startDate && value.endDate && value.startDate > value.endDate) {
+    context.addIssue({ code: "custom", path: ["endDate"], message: "End date must be on or after start date." });
+  }
+});
+
+const positiveMoneyString = moneyString.refine(decimalIsPositive, "Amount must be greater than zero.");
+
+export const paymentInputSchema = z.object({
+  method: z.enum(paymentMethods),
+  amount: positiveMoneyString,
+  paidAt: validDate,
+  note: optionalText(1000),
+  reference: optionalText(160),
+});
+
+export const paymentListQuerySchema = pageQuerySchema.extend({
+  method: z.enum(paymentMethods).optional(),
   startDate: dateOnly.optional(),
   endDate: dateOnly.optional(),
 }).superRefine((value, context) => {
