@@ -592,4 +592,3 @@ ALTER TABLE "BillingRunItem" ADD CONSTRAINT "BillingRunItem_subscriptionId_fkey"
 -- AddForeignKey
 ALTER TABLE "BillingRunItem" ADD CONSTRAINT "BillingRunItem_invoiceId_fkey" FOREIGN KEY ("invoiceId") REFERENCES "Invoice"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 CREATE UNIQUE INDEX invoice_sub_period_uniq ON "Invoice" ("subscriptionId","periodStart") WHERE status <> 'CANCELLED';
-CREATE UNIQUE INDEX invoice_sub_period_uniq ON "Invoice" ("subscriptionId","periodStart") WHERE status <> 'CANCELLED';
