@@ -5,10 +5,14 @@ import {
   Prisma,
   ProductType,
   Role,
+  SubscriptionStatus,
   TaxType,
 } from "@prisma/client";
+import { addDays } from "date-fns";
 import { hashPassword } from "../src/server/auth/password";
 import { prisma } from "../src/server/db";
+
+const seedBatchSize = 50;
 
 async function seedUser(input: { name: string; email: string; password: string; role: Role }) {
   const passwordHash = await hashPassword(input.password);
@@ -115,6 +119,98 @@ async function seedCustomer(input: {
     await prisma.customer.update({ where: { id: existing.id }, data: input });
   } else {
     await prisma.customer.create({ data: input });
+  }
+}
+
+async function seedDemoCustomersAndSubscriptions() {
+  const customers = Array.from({ length: 100 }, (_, index) => {
+    const sequence = String(index + 1).padStart(3, "0");
+    const name = `Brightloop Demo Customer ${sequence}`;
+    return {
+      id: `demo-customer-${sequence}`,
+      name,
+      email: `demo-customer-${sequence}@brightloop.example`,
+      phone: `+1 555 020 ${String(index + 1).padStart(4, "0")}`,
+      company: `${name} Inc.`,
+      address: `${100 + index} Market Street, San Francisco, CA`,
+    };
+  });
+
+  for (let offset = 0; offset < customers.length; offset += seedBatchSize) {
+    await prisma.customer.createMany({
+      data: customers.slice(offset, offset + seedBatchSize),
+      skipDuplicates: true,
+    });
+  }
+
+  const [plan, paymentTerm, product] = await Promise.all([
+    prisma.plan.findFirst({ where: { name: "Growth Monthly" } }),
+    prisma.paymentTerm.findUnique({ where: { name: "Net 30" } }),
+    prisma.product.findFirst({
+      where: { name: "Brightloop Subscription" },
+      include: { defaultTax: true },
+    }),
+  ]);
+  if (!plan || !paymentTerm || !product?.defaultTaxId || !product.defaultTax) {
+    throw new Error("Unable to seed demo subscriptions: required plan, payment term, product, or tax is missing.");
+  }
+
+  const now = new Date();
+  const subscriptionRows = Array.from({ length: 300 }, (_, index) => {
+    const sequence = String(index + 1).padStart(4, "0");
+    const nextBillingDate = addDays(now, -((index * 37) % 90 + 1));
+    return {
+      id: `demo-subscription-${sequence}`,
+      number: `DEMO-SUB-${sequence}`,
+      customerId: customers[index % customers.length]!.id,
+      planId: plan.id,
+      paymentTermId: paymentTerm.id,
+      status: SubscriptionStatus.ACTIVE,
+      startDate: addDays(nextBillingDate, -30),
+      expiryDate: addDays(now, 365),
+      billedCount: 0,
+      nextBillingDate,
+    };
+  });
+
+  for (let offset = 0; offset < subscriptionRows.length; offset += seedBatchSize) {
+    await prisma.subscription.createMany({
+      data: subscriptionRows.slice(offset, offset + seedBatchSize),
+      skipDuplicates: true,
+    });
+  }
+
+  const seededSubscriptions = await prisma.subscription.findMany({
+    where: { number: { in: subscriptionRows.map(({ number }) => number) } },
+    select: { id: true, number: true },
+  });
+  if (seededSubscriptions.length !== subscriptionRows.length) {
+    throw new Error("Unable to seed demo subscription lines: one or more subscriptions are missing.");
+  }
+
+  const unitPrice = product.salesPrice;
+  const taxId = product.defaultTaxId;
+  const quantity = 3;
+  const subtotal = unitPrice.mul(quantity);
+  const taxAmount = subtotal
+    .mul(product.defaultTax.rate)
+    .div(100)
+    .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+  const lines = seededSubscriptions.map(({ id, number }) => ({
+    id: `demo-line-${number.slice(-4)}`,
+    subscriptionId: id,
+    productId: product.id,
+    quantity,
+    unitPrice,
+    taxId,
+    amount: subtotal.plus(taxAmount),
+  }));
+
+  for (let offset = 0; offset < lines.length; offset += seedBatchSize) {
+    await prisma.subscriptionLine.createMany({
+      data: lines.slice(offset, offset + seedBatchSize),
+      skipDuplicates: true,
+    });
   }
 }
 
@@ -335,6 +431,8 @@ async function main() {
     company: "Meridian Health Group",
     address: "800 Lake Avenue, Chicago, IL",
   });
+
+  await seedDemoCustomersAndSubscriptions();
 
   await seedQuotationTemplate({
     name: "Starter Implementation",
